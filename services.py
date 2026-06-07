@@ -259,4 +259,49 @@ def can_send_message(user_id: int) -> tuple[bool, str]:
         return False, f"yaar 🥺 today's messages are finished!\n\n💎 Upgrade your plan for more!\nCheck: /myplan"
     return True, ""
 
+# ==================== BROADCAST SYSTEM ====================
+
+async def broadcast_to_all(client, broadcast_type: str, content: str, caption: str = ""):
+    """Fully functional broadcast with rate limiting and error handling"""
+    from database import get_connection
+    import asyncio
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM users")
+    all_users = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    
+    success = 0
+    failed = 0
+    
+    for user_id in all_users:
+        try:
+            if broadcast_type == "text":
+                await client.send_message(user_id, f"📢 *Message from Alya* ✨\n\n{content}", parse_mode="Markdown")
+            elif broadcast_type == "photo":
+                await client.send_photo(user_id, content, caption=caption or "")
+            elif broadcast_type == "video":
+                await client.send_video(user_id, content, caption=caption or "")
+            elif broadcast_type == "animation":
+                await client.send_animation(user_id, content, caption=caption or "")
+            elif broadcast_type == "document":
+                await client.send_document(user_id, content, caption=caption or "")
+            elif broadcast_type == "audio":
+                await client.send_audio(user_id, content, caption=caption or "")
+            elif broadcast_type == "voice":
+                await client.send_voice(user_id, content)
+            elif broadcast_type == "sticker":
+                await client.send_sticker(user_id, content)
+            
+            success += 1
+            await asyncio.sleep(0.3)  # Rate limit protection
+            
+        except Exception as e:
+            failed += 1
+            print(f"Broadcast failed for {user_id}: {e}")
+            continue
+    
+    return success, failed, len(all_users)
+
 print("✅ Services module loaded")

@@ -142,6 +142,10 @@ async def help_handler(client, message: Message):
         parse_mode="Markdown"
     )
 
+@app.on_message(filters.command("language"))
+async def language_command(client, message: Message):
+    await show_language_menu(client, message)
+
 @app.on_callback_query(filters.regex("^help_"))
 async def help_callback(client, callback: CallbackQuery):
     data = callback.data
@@ -295,6 +299,16 @@ async def main_message_handler(client, message: Message):
     # Waiting states for owner
     if await is_owner(user.id) and user.id in import_sessions:
         session = import_sessions[user.id]
+        
+        if text.lower() == "done":
+            if session.get("waiting_pic"):
+                del import_sessions[user.id]
+                await message.reply(f"✅ Pic collection finished! Total: {len(get_all_media('pic'))}")
+                return
+            if session.get("waiting_sticker"):
+                del import_sessions[user.id]
+                await message.reply(f"✅ Sticker collection finished! Total: {len(get_all_media('sticker'))}")
+                return
         
         if session.get("waiting_broadcast"):
             # Handle broadcast media/text
@@ -609,8 +623,9 @@ async def callback_handler(client, callback: CallbackQuery):
 # ==================== ADMIN FUNCTIONS ====================
 
 async def show_stats(client, message):
-    # Basic stats
-    conn = __import__("sqlite3").connect("alya_bot.db")
+    from database import get_connection
+    
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM users")
     total = cursor.fetchone()[0]
@@ -683,7 +698,9 @@ async def show_language_menu(client, message):
     await message.reply(text, reply_markup=keyboard, parse_mode="Markdown")
 
 async def show_all_users(client, message):
-    conn = __import__("sqlite3").connect("alya_bot.db")
+    from database import get_connection
+    
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM users LIMIT 50")
     users = cursor.fetchall()
@@ -723,11 +740,38 @@ async def handle_broadcast_start(client, message, session):
     await message.reply("✅ Content received. Confirm broadcast?", reply_markup=broadcast_confirm_keyboard())
 
 async def handle_broadcast_confirm(client, callback):
-    # Full broadcast logic would go here (simplified for length)
-    await callback.message.edit_text("📢 *Broadcast started...*", parse_mode="Markdown")
-    # In real implementation: loop through users and send
-    await asyncio.sleep(2)
-    await callback.message.edit_text("✅ Broadcast complete!")
+    user_id = callback.from_user.id
+    if user_id not in import_sessions:
+        await callback.answer("❌ No broadcast data found")
+        return
+    
+    session = import_sessions[user_id]
+    btype = session.get("broadcast_type", "text")
+    bcontent = session.get("broadcast_content", "")
+    bcaption = session.get("broadcast_caption", "")
+    
+    await callback.message.edit_text("📢 *Broadcasting to all users...*\nPlease wait...", parse_mode="Markdown")
+    
+    try:
+        success, failed, total = await broadcast_to_all(client, btype, bcontent, bcaption)
+        
+        result_text = f"""「 📢 *BROADCAST COMPLETE* 」
+─────────────────────
+
+👥 Total Users: *{total}*
+✅ Success: *{success}*
+❌ Failed: *{failed}*
+
+─────────────────────"""
+        
+        await callback.message.edit_text(result_text, parse_mode="Markdown")
+        
+    except Exception as e:
+        await callback.message.edit_text(f"❌ Broadcast failed: {str(e)}")
+    
+    # Clean up
+    if user_id in import_sessions:
+        del import_sessions[user_id]
 
 async def handle_import(client, message):
     if not message.document or not message.document.file_name.endswith(".txt"):
@@ -744,13 +788,14 @@ async def handle_import(client, message):
 
 # ==================== PAYMENT HANDLERS ====================
 
-@app.on_message(filters.successful_payment)
+@app.on_message(filters.create(lambda _, __, m: bool(getattr(m, "successful_payment", None))))
 async def payment_handler(client, message):
     stars = message.successful_payment.total_amount
     user = message.from_user
     
-    # Record payment
-    conn = __import__("sqlite3").connect("alya_bot.db")
+    # Record payment using database module
+    from database import get_connection
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("INSERT INTO payments (user_id, stars) VALUES (?, ?)", (user.id, stars))
     conn.commit()
